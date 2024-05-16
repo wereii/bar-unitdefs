@@ -4,7 +4,7 @@ unitdefs-reshaper.py
 Reprocesses unitdefs export from Beyond All Reason into more usable format.
 Mainly it focuses on:
 - Extracting data that is important statistic of a unit (build power for builders, metal production for mexes, ...)
-- Removing engine specific information (sounds, )
+- Removing engine specific information (sounds, models locations, ...)
 """
 
 import json
@@ -151,7 +151,7 @@ arg_parser.add_argument("--debug", "-d", action="store_true", help="Enable debug
 arg_parser.add_argument(
     "--unitdefs-dir",
     required=True,
-    help='Location of json exported unitdefs (usually "json_export/")',
+    help='Location of exported json unitdefs (usually "json_export/")',
     type=pathlib.Path,
 )
 
