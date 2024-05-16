@@ -1,8 +1,8 @@
-### unitdefs-reshaper
+# unitdefs-reshaper
 
 Reprocess raw unitdefs json export from game into something more _usable_
 
-# Script
+### Run
 
 The script `unitdefs-reshaper.py` is single-file CLI that should run almost anywhere with fresh enough python version (
 tested with py3.12).
