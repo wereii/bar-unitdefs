@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 # ---- Definitions
 
+# NOTE: Does not handle armscavenger properly
 FACTION_PREFIX_MAPPER = {
     "arm": "armada",
     "cor": "cortex",
@@ -41,19 +42,19 @@ class JsonCallableEncoder(json.JSONEncoder):
 
 
 class IdResolver:
-    """Resolve engine IDs to names"""
-    mapper: dict[int, str]
+    """Resolve engine IDs to data"""
+    mapper: dict[int, any]
 
     def __init__(self):
         self.mapper = {}
 
-    def register_id(self, id_: int, name: str):
-        self.mapper[id_] = name
+    def register_id(self, id_: int, data: any):
+        self.mapper[id_] = data
 
-    def resolve_id(self, id_: int) -> str:
+    def resolve_id(self, id_: int) -> any:
         return self.mapper[id_]
 
-    def lazy_resolve_id(self, id_: int) -> Callable[[], str]:
+    def lazy_resolve_id(self, id_: int) -> Callable[[], any]:
         return partial(self.resolve_id, id_)
 
 
@@ -72,6 +73,7 @@ def _copy_key(key: any, *, source: dict, target: dict, default: any = _default_s
 
 def process_unitdefs(unitdefs_dir: pathlib.Path) -> list:
     id_name_resolver = IdResolver()
+    weapon_def_resolver = IdResolver()
 
     output = list()
 
@@ -80,13 +82,17 @@ def process_unitdefs(unitdefs_dir: pathlib.Path) -> list:
             logger.debug(f"Skipping {unitdef_path}")
             continue
 
-        logger.info(f"Processing {unitdef_path.name}")
+        logger.debug(f"Processing {unitdef_path.name}")
         with open(unitdef_path, "r") as fd:
             unitdef_data_raw = json.load(fd)
 
         unit_dict = dict()
         engine_unit_name = unitdef_data_raw["name"]
+
+        # "Cache" ids for later resolution
         id_name_resolver.register_id(unitdef_data_raw["id"], engine_unit_name)
+        if "wDefs" in unitdef_data_raw:
+            process_weapon_defs(unitdef_data_raw["wDefs"], weapon_def_resolver)
 
         extract_generic(unitdef_data_raw, unit_dict)
         extract_unit_kind(unitdef_data_raw, unit_dict)
@@ -99,10 +105,18 @@ def process_unitdefs(unitdefs_dir: pathlib.Path) -> list:
     return output
 
 
+def process_weapon_defs(wdefs_list: list[dict], wdef_resolver: IdResolver):
+    for definition in wdefs_list:
+        if not definition:
+            continue
+        wdef_resolver.register_id(definition["id"], definition)
+
+
 def extract_generic(unitdef_data: dict, result_data: dict):
     """Extract generic fields like translatedHumanName, hp, costs, ..."""
 
     result_data["humanName"] = unitdef_data["translatedHumanName"]
+    result_data["humanTooltip"] = unitdef_data["translatedTooltip"]
 
     _copy_key("name", source=unitdef_data, target=result_data)
     _copy_key("health", source=unitdef_data, target=result_data)
@@ -118,6 +132,10 @@ def extract_generic(unitdef_data: dict, result_data: dict):
         if unitdef_data["name"].startswith(prefix):
             faction = faction_name
 
+    # Exception, FIXME TODO HACK
+    if unitdef_data["name"].startswith("armscavenger"):
+        faction = "scavenger"
+
     result_data["faction"] = faction
 
 
@@ -132,13 +150,48 @@ def extract_tech_level(unitdef_data: dict, result_data: dict):
     custom_params = unitdef_data.get("customParams")
     if custom_params:
         result_data["techLevel"] = custom_params.get("techlevel")
-    # TODO
 
 
 def extract_unit_kind(unitdef_data: dict, result_data: dict):
     """Extract unit kind [ bot | veh | air | sub | hov | ...? ]"""
     # TODO
-    pass
+
+    if unitdef_data["isBuilding"]:
+        # to get the kind for isBuilder buildings
+        # we need buildOptions resolved
+        # then guess from the units it can make what general unit kind this creates
+        # TODO
+        return
+
+    # TODO: Lot of assumptions, raptors have their of category?
+    kind = None
+    if unitdef_data["isAirUnit"]:
+        kind = "air"
+        if unitdef_data["springCategories"].get("vtol"):
+            kind = "vtol"
+        elif unitdef_data["springCategories"].get("space"):
+            kind = "space"
+        else:
+            assert unitdef_data["springCategories"].get("air"), unitdef_data["springCategories"]
+
+    elif unitdef_data["isGroundUnit"]:
+        if unitdef_data["springCategories"].get("commander"):
+            kind = "commander"
+        elif unitdef_data["springCategories"].get("bot"):
+            kind = "bot"
+        elif unitdef_data["springCategories"].get("tank"):
+            kind = "vehicle"
+        elif unitdef_data["springCategories"].get("hover"):
+            kind = "hover"
+        elif unitdef_data["springCategories"].get("underwater"):
+            kind = "sub"
+        elif unitdef_data["springCategories"].get("ship"):
+            kind = "ship"
+
+    else:
+        logger.warning("Unknown unit kind: %s:", unitdef_data["name"])
+
+    result_data["kind"] = kind
 
 
 # ----
@@ -147,6 +200,7 @@ def extract_unit_kind(unitdef_data: dict, result_data: dict):
 arg_parser = argparse.ArgumentParser(prog="unitdefs-reshaper")
 
 arg_parser.add_argument("--debug", "-d", action="store_true", help="Enable debug logging")
+arg_parser.add_argument("--dry-run", "-n", action="store_true", help="Run without writing anything")
 
 arg_parser.add_argument(
     "--unitdefs-dir",
@@ -178,8 +232,12 @@ def main():
 
     processed = process_unitdefs(unitdefs_dir)
     logger.debug("Processed raw unitdefs")
-    with open(output_file, "w") as out_fp:
-        json.dump(processed, out_fp, cls=JsonCallableEncoder)
+
+    if not args.dry_run:
+        with open(output_file, "w") as out_fp:
+            json.dump(processed, out_fp, cls=JsonCallableEncoder)
+    else:
+        logger.info("Dry run, not writing anything")
 
 
 if __name__ == "__main__":
