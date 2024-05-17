@@ -163,31 +163,30 @@ def extract_unit_kind(unitdef_data: dict, result_data: dict):
         # TODO
         return
 
+    categories = unitdef_data["springCategories"]
     # TODO: Lot of assumptions, raptors have their of category?
     kind = None
     if unitdef_data["isAirUnit"]:
         kind = "air"
-        if unitdef_data["springCategories"].get("vtol"):
+        if categories.get("vtol"):
             kind = "vtol"
-        elif unitdef_data["springCategories"].get("space"):
+        elif categories.get("space"):
             kind = "space"
         else:
-            assert unitdef_data["springCategories"].get("air"), unitdef_data["springCategories"]
-
+            assert categories.get("air"), categories
     elif unitdef_data["isGroundUnit"]:
-        if unitdef_data["springCategories"].get("commander"):
+        if categories.get("commander"):
             kind = "commander"
-        elif unitdef_data["springCategories"].get("bot"):
+        elif categories.get("bot"):
             kind = "bot"
-        elif unitdef_data["springCategories"].get("tank"):
+        elif categories.get("tank"):
             kind = "vehicle"
-        elif unitdef_data["springCategories"].get("hover"):
+        elif categories.get("hover"):
             kind = "hover"
-        elif unitdef_data["springCategories"].get("underwater"):
+        elif categories.get("underwater"):
             kind = "sub"
-        elif unitdef_data["springCategories"].get("ship"):
+        elif categories.get("ship"):
             kind = "ship"
-
     else:
         logger.warning("Unknown unit kind: %s:", unitdef_data["name"])
 
