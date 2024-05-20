@@ -14,7 +14,7 @@ import pathlib
 from functools import partial
 from typing import Callable
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("unitdefs-reshaper")
 
 # ---- Definitions
 
@@ -95,8 +95,10 @@ def process_unitdefs(unitdefs_dir: pathlib.Path) -> list:
             process_weapon_defs(unitdef_data_raw["wDefs"], weapon_def_resolver)
 
         extract_generic(unitdef_data_raw, unit_dict)
+        extract_unit_type(unitdef_data_raw, unit_dict)
         extract_unit_kind(unitdef_data_raw, unit_dict)
         extract_tech_level(unitdef_data_raw, unit_dict)
+        extract_features(unitdef_data_raw, unit_dict)
 
         logger.debug(f"{engine_unit_name} - extracted generic fields")
 
@@ -124,17 +126,28 @@ def extract_generic(unitdef_data: dict, result_data: dict):
     _copy_key("energyCost", source=unitdef_data, target=result_data)
     _copy_key("buildTime", source=unitdef_data, target=result_data)
 
+    _copy_key("metalStorage", source=unitdef_data, target=result_data)
+    _copy_key("energyStorage", source=unitdef_data, target=result_data)
+
     result_data["los"] = unitdef_data.get("sightDistance", 0)
     result_data["losAir"] = unitdef_data.get("airSightDistance", 0)
 
-    faction = None
-    for prefix, faction_name in FACTION_PREFIX_MAPPER.items():
-        if unitdef_data["name"].startswith(prefix):
-            faction = faction_name
+    # there is also radarRange key but not all units, that have radarRadius, have radarRange (armaap)
+    result_data["radarRange"] = unitdef_data.get("radarRadius", 0)
 
-    # Exception, FIXME TODO HACK
+    result_data["unitgroup"] = unitdef_data["customParams"].get("unitgroup")
+
+    faction = None
+    # Exception, scavboss
     if unitdef_data["name"].startswith("armscavenger"):
         faction = "scavenger"
+    # Exception, scavboss
+    elif unitdef_data["name"] == "corvacct":
+        faction = "scavenger"
+    else:
+        for prefix, faction_name in FACTION_PREFIX_MAPPER.items():
+            if unitdef_data["name"].startswith(prefix):
+                faction = faction_name
 
     result_data["faction"] = faction
 
@@ -144,38 +157,56 @@ def extract_unit_type(unitdef_data: dict, result_data: dict):
 
     if unitdef_data["isBuilding"]:
         result_data["type"] = "building"
+    else:
+        result_data["type"] = "unit"
 
 
 def extract_tech_level(unitdef_data: dict, result_data: dict):
-    custom_params = unitdef_data.get("customParams")
-    if custom_params:
-        result_data["techLevel"] = custom_params.get("techlevel")
+    result_data["techLevel"] = unitdef_data["customParams"].get("techlevel")
 
 
 def extract_unit_kind(unitdef_data: dict, result_data: dict):
     """Extract unit kind [ bot | veh | air | sub | hov | ...? ]"""
     # TODO
+    kind = None
+
+    # TODO: Lot of assumptions here, raptors have their of category?
 
     if unitdef_data["isBuilding"]:
-        # to get the kind for isBuilder buildings
-        # we need buildOptions resolved
-        # then guess from the units it can make what general unit kind this creates
-        # TODO
-        return
+        kind = "building"
+        if unitdef_data["isFactory"]:
+            kind = "factory"
+        elif unitdef_data["isExtractor"]:
+            kind = "extractor"
+            _copy_key("extractsMetal", source=unitdef_data, target=result_data)
+        elif unitdef_data["customParams"].get("solar"):
+            kind = "solargen"
+            if unitdef_data["energyUpkeep"] < 0:
+                # T1 solar
+                unitdef_data["energyMake"] = abs(unitdef_data["energyUpkeep"])
+            else:
+                # T2
+                unitdef_data["energyMake"] = unitdef_data["energyMake"] or unitdef_data["totalEnergyOut"]
+        elif unitdef_data["windGenerator"]:
+            kind = "windgen"
+            _copy_key("energymultiplier", source=unitdef_data["customParams"], target=result_data)
+        elif unitdef_data["tidalGenerator"]:
+            kind = "tidalgen"
+        elif unitdef_data["isStaticBuilder"]:
+            kind = "static_builder"
+        elif unitdef_data["energyStorage"] > 0 or unitdef_data["metalStorage"] > 0:
+            kind = "storage"
+        elif unitdef_data["modCategories"].get("weapon"):
+            kind = "defense"
 
-    categories = unitdef_data["springCategories"]
-    # TODO: Lot of assumptions, raptors have their of category?
-    kind = None
-    if unitdef_data["isAirUnit"]:
+    elif unitdef_data["isAirUnit"]:
         kind = "air"
-        if categories.get("vtol"):
-            kind = "vtol"
-        elif categories.get("space"):
-            kind = "space"
-        else:
-            assert categories.get("air"), categories
+        # TODO: sub-kind vtol
     elif unitdef_data["isGroundUnit"]:
-        if categories.get("commander"):
+        categories = unitdef_data["modCategories"]
+        if categories.get("space"):
+            kind = "space"
+        elif categories.get("commander"):
             kind = "commander"
         elif categories.get("bot"):
             kind = "bot"
@@ -187,10 +218,61 @@ def extract_unit_kind(unitdef_data: dict, result_data: dict):
             kind = "sub"
         elif categories.get("ship"):
             kind = "ship"
-    else:
-        logger.warning("Unknown unit kind: %s:", unitdef_data["name"])
+        elif unitdef_data["isImmobile"]:
+            print(f"\n{unitdef_data['name']}\n")
+            if unitdef_data["hasShield"]:
+                kind = "shield"
+            else:
+                kind = "immobile"
+        elif unitdef_data["deathExplosion"] == "decoycommander":
+            # TODO: Arbitrary check
+            kind = "decoycommander"
+        elif categories.get("object"):
+            kind = "object"
+        else:
+            logger.warning("Unknown unit kind: %s", unitdef_data["name"])
 
-    result_data["kind"] = kind
+    result_data["unit_kind"] = kind
+
+
+def extract_features(unitdef_data: dict, result_data: dict):
+    features = dict()
+    categories = unitdef_data["modCategories"]
+
+    if categories.get("empable"):
+        features["empable"] = True
+
+    if categories.get("vtol"):
+        features["vtol"] = True
+
+    if unitdef_data["canSelfDestruct"] or unitdef_data["canSelfD"]:
+        features["selfd"] = True
+
+    if unitdef_data["canKamikaze"]:
+        features["kamikaze"] = True
+
+    if unitdef_data["canCloak"]:
+        features["cloak"] = True
+
+    if unitdef_data["isTransport"]:
+        features["transport"] = True
+
+    if unitdef_data["capturable"]:
+        features["capturable"] = True
+
+    if unitdef_data["canCapture"]:
+        features["can_capture"] = True
+
+    if unitdef_data["canResurrect"]:
+        features["can_resurrect"] = True
+
+    if unitdef_data["canRepair"]:
+        features["can_repair"] = True
+
+    if features:
+        result_data["features"] = features
+    else:
+        result_data["features"] = None
 
 
 # ----
@@ -233,6 +315,7 @@ def main():
     logger.debug("Processed raw unitdefs")
 
     if not args.dry_run:
+        logger.info(f"Writing unitdefs to file {output_file}")
         with open(output_file, "w") as out_fp:
             json.dump(processed, out_fp, cls=JsonCallableEncoder)
     else:
